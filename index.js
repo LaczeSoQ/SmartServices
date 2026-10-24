@@ -21,15 +21,6 @@ app.listen(PORT, () => {
     console.log(`Server is listening on port ${PORT}`);
 });
 
-// 2. ตั้งค่าบอท Discord
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildThreads
-    ]
-});
 
 // ใช้สำหรับเก็บข้อมูลโพสต์ชั่วคราวขณะบอททำงาน
 const postDataMap = new Map();
