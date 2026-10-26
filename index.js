@@ -51,7 +51,7 @@ async function callGeminiWithFallback(promptText) {
     throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError.message}`);
 }
 
-// 3. ตั้งค่าบอท Discord (แก้ไข Intents ให้ถูกต้อง ป้องกัน Error BitFieldInvalid)
+// 3. ตั้งค่าบอท Discord
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -73,37 +73,23 @@ client.on('messageCreate', async message => {
     if (message.channel.isThread()) {
         const threadId = message.channel.id;
         
-        // ให้ AI ช่วยวิเคราะห์ข้อมูลเบื้องต้นจากโพสต์งานโรงกลึง
-        let aiAnalysis = "กำลังตรวจสอบข้อมูลด้วย AI...";
-        try {
-            const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${message.content}" ประเมินสั้นๆ ว่าข้อมูลเกี่ยวกับ รายละเอียดชิ้นงาน, ขนาด, และวัสดุ ครบถ้วนหรือไม่ ถ้าขาดอะไรให้บอกสั้นๆ`;
-            aiAnalysis = await callGeminiWithFallback(prompt);
-        } catch (err) {
-            aiAnalysis = "⚠️ AI ไม่สามารถตรวจสอบได้ในขณะนี้ (ใช้ Key สำรองแล้วยังขัดข้อง)";
-        }
-
+        // เก็บข้อมูลโพสต์ตั้งต้น
         postDataMap.set(threadId, {
             ownerId: message.author.id,
-            title: message.channel.name,
-            content: message.content,
-            analysis: aiAnalysis
+            content: message.content
         });
 
-        // ปุ่มสำหรับผู้ชม
-        const viewerRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('ask_details').setLabel('🔍 ขอรายละเอียดชิ้นงาน').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('ask_dims').setLabel('📏 ขอข้อมูลขนาด').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('ask_material').setLabel('🔩 ขอข้อมูลวัสดุ').setStyle(ButtonStyle.Secondary)
-        );
-
-        // ปุ่มสำหรับเจ้าของโพสต์
-        const ownerRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('owner_confirm').setLabel('✅ ยืนยันข้อมูลครบถ้วน').setStyle(ButtonStyle.Success)
+        // แสดงปุ่มเดียวสำหรับสั่งให้ AI ตรวจสอบและสรุปผล
+        const actionRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('check_and_summarize')
+                .setLabel('📋 ตรวจสอบและสรุปข้อมูลงาน')
+                .setStyle(ButtonStyle.Primary)
         );
 
         await message.reply({
-            content: `📌 **ระบบ AI ตรวจสอบงานโรงกลึง:**\n> ${aiAnalysis}`,
-            components: [viewerRow, ownerRow]
+            content: `📌 **ระบบจัดการโพสต์งานโรงกลึง:** กดปุ่มด้านล่างเพื่อให้ AI ตรวจสอบความครบถ้วนและสรุปข้อมูลครับ`,
+            components: [actionRow]
         });
     }
 });
@@ -112,59 +98,88 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
-    const threadId = interaction.channel.id;
-    const postData = postDataMap.get(threadId);
+    if (interaction.customId === 'check_and_summarize') {
+        const threadId = interaction.channel.id;
+        const postData = postDataMap.get(threadId);
 
-    if (!postData) {
-        return interaction.reply({ content: 'ไม่พบข้อมูลโพสต์นี้ในระบบ', ephemeral: true });
-    }
-
-    const userId = interaction.user.id;
-
-    if (['ask_details', 'ask_dims', 'ask_material'].includes(interaction.customId)) {
-        if (userId === postData.ownerId) {
-            return interaction.reply({ content: 'คุณเป็นเจ้าของโพสต์ ไม่จำเป็นต้องกดเตือนตัวเองครับ', ephemeral: true });
+        if (!postData) {
+            return interaction.reply({ content: 'ไม่พบข้อมูลโพสต์นี้ในระบบ', ephemeral: true });
         }
 
-        let question = "";
-        if (interaction.customId === 'ask_details') question = "รายละเอียดชิ้นงานเพิ่มเติม";
-        if (interaction.customId === 'ask_dims') question = "ข้อมูลขนาด (ความกว้าง/ความยาว)";
-        if (interaction.customId === 'ask_material') question = "ข้อมูลวัสดุที่ใช้ผลิต";
+        await interaction.deferReply();
 
-        return interaction.reply({
-            content: `📢 **แจ้งเตือนจากผู้เยี่ยมชมถึงเจ้าของโพสต์ (<@${postData.ownerId}>):** รบกวนขอข้อมูล **${question}** เพิ่มเติมหน่อยครับ`
-        });
-    }
-
-    if (interaction.customId === 'owner_confirm') {
-        if (userId !== postData.ownerId) {
-            return interaction.reply({ content: 'เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันข้อมูลนี้ครับ', ephemeral: true });
-        }
-
-        const currentDate = new Date().toISOString().split('T')[0];
-        const cleanTitle = postData.title.replace(/^\[.*?\]\s*/, '');
-        const newThreadName = `${currentDate} - ${cleanTitle}`;
-        
         try {
-            await interaction.channel.setName(newThreadName);
-        } catch (error) {
-            console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
+            // ใช้ AI วิเคราะห์ข้อมูลและสกัดหัวข้อตามต้องการ
+            const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${postData.content}"
+ตรวจสอบว่ามีข้อมูลครบถ้วนหรือไม่ (ต้องมี: ชื่อบริษัทลูกค้า, ชื่อลูกค้า, และรายละเอียดงาน เช่น ขนาด วัสดุ จำนวน)
+หากข้อมูลไม่ครบ ให้ขึ้นต้นด้วยคำว่า "INCOMPLETE:" ตามด้วยสิ่งที่ขาดหายไปสั้นๆ
+หากข้อมูลครบ ให้ขึ้นต้นด้วยคำว่า "COMPLETE:" ตามด้วยข้อมูลในรูปแบบนี้:
+- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัทลูกค้า]
+- ชื่อลูกค้า: [ระบุชื่อลูกค้า]
+- รายละเอียดงาน: [ระบุรายละเอียด ขนาด วัสดุ จำนวน]`;
+
+            const aiResponse = await callGeminiWithFallback(prompt);
+
+            if (aiResponse.includes('INCOMPLETE:')) {
+                const missingInfo = aiResponse.replace('INCOMPLETE:', '').trim();
+                return interaction.editReply({
+                    content: `⚠️ **ข้อมูลยังไม่ครบถ้วนครับ:**\n> ${missingInfo}\n\nกรุณาเพิ่มข้อมูลให้เรียบร้อยแล้วกดปุ่มตรวจสอบใหม่อีกครั้ง`
+                });
+            }
+
+            // ถ้าข้อมูลครบ ดึงชื่อพนักงานจากชื่อ Discord ของผู้กดปุ่ม
+            const employeeName = interaction.member ? interaction.member.displayName : interaction.user.username;
+
+            // สกัดข้อมูลจาก AI Response
+            let companyName = "ไม่ระบุชื่อบริษัท";
+            let customerName = "ไม่ระบุชื่อลูกค้า";
+            let jobDetails = postData.content;
+
+            const companyMatch = aiResponse.match(/- ชื่อบริษัทลูกค้า:\s*(.*)/);
+            const customerMatch = aiResponse.match(/- ชื่อลูกค้า:\s*(.*)/);
+            const detailsMatch = aiResponse.match(/- รายละเอียดงาน:\s*([\s\S]*)/);
+
+            if (companyMatch) companyName = companyMatch[1].trim();
+            if (customerMatch) customerName = customerMatch[1].trim();
+            if (detailsMatch) jobDetails = detailsMatch[1].trim();
+
+            // เปลี่ยนชื่อโพสต์เป็น วันที่ + ชื่อบริษัทลูกค้า
+            const currentDate = new Date().toISOString().split('T')[0];
+            const newThreadName = `${currentDate} - ${companyName}`;
+
+            try {
+                await interaction.channel.setName(newThreadName);
+            } catch (error) {
+                console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
+            }
+
+            // สร้าง Embed สรุป 4 หัวข้อ
+            const summaryEmbed = new EmbedBuilder()
+                .setTitle('📋 สรุปข้อมูลงานโรงกลึง (ข้อมูลครบถ้วน)')
+                .setColor(0x00FF00)
+                .addFields(
+                    { name: '🏢 ชื่อบริษัทลูกค้า', value: companyName, inline: false },
+                    { name: '👤 ชื่อลูกค้า', value: customerName, inline: false },
+                    { name: '👨‍💻 ชื่อพนักงาน (ผู้บันทึก)', value: employeeName, inline: false },
+                    { name: '⚙️ รายละเอียดงาน', value: jobDetails, inline: false }
+                )
+                .setTimestamp();
+
+            await interaction.channel.send({ embeds: [summaryEmbed] });
+
+            // ลบปุ่มออกหลังจากการยืนยันสำเร็จ
+            await interaction.message.edit({
+                content: `✅ **ตรวจสอบและสรุปข้อมูลเรียบร้อยแล้วโดยคุณ ${employeeName}**`,
+                components: []
+            });
+
+            await interaction.editReply({ content: '✅ ดำเนินการเสร็จสิ้น!' });
+
+        } catch (err) {
+            console.error(err);
+            await interaction.editReply({ content: '❌ เกิดข้อผิดพลาดในการประมวลผลของ AI กรุณาลองใหม่อีกครั้ง' });
         }
-
-        const summaryEmbed = new EmbedBuilder()
-            .setTitle('📋 สรุปข้อมูลงานโรงกลึง (ข้อมูลครบถ้วน)')
-            .setDescription(`**ชื่องาน:** ${cleanTitle}\n**วันที่อัปเดต:** ${currentDate}\n\n**รายละเอียดเบื้องต้น:**\n${postData.content}`)
-            .setColor(0x00FF00)
-            .setTimestamp();
-
-        await interaction.channel.send({ embeds: [summaryEmbed] });
-        
-        return interaction.update({ 
-            content: '✅ **ยืนยันข้อมูลสำเร็จ:** บอทได้ทำการอัปเดตชื่อโพสต์และสรุปข้อมูลเรียบร้อยแล้วครับ!', 
-            components: [] 
-        });
     }
 });
 
-// เริ่มต้นทำงานบอทโดยดึง Token จาก Environment Variable
 client.login(process.env.DISCORD_TOKEN);
