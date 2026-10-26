@@ -36,7 +36,8 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            // ใช้โมเดล gemini-3.8 ตามที่คุณต้องการ
+            const model = genAI.getGenerativeModel({ model: "gemini-3.8" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
@@ -56,7 +57,6 @@ const client = new Client({
     ]
 });
 
-// เก็บข้อมูลโพสต์และข้อความทั้งหมดในเธรด
 const postDataMap = new Map();
 
 client.once('ready', () => {
@@ -84,7 +84,6 @@ client.on('messageCreate', async message => {
         const fullContent = postData.contents.join('\n');
 
         try {
-            // AI วิเคราะห์อัตโนมัติทันที
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
 ตรวจสอบว่ามีข้อมูลครบถ้วนหรือไม่ (ต้องมี: ชื่อบริษัทลูกค้า, ชื่อลูกค้า, ประเภทงานว่า "ทำใหม่" หรือ "แก้ไข", และรายละเอียดงาน เช่น ขนาด วัสดุ จำนวน)
 หากข้อมูลไม่ครบ ให้ขึ้นต้นด้วยคำว่า "INCOMPLETE:" ตามด้วยสิ่งที่ขาดหายไปสั้นๆ
@@ -147,7 +146,6 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', ephemeral: true });
         }
 
-        // อนุญาตให้เฉพาะเจ้าของโพสต์กดเท่านั้น
         if (interaction.user.id !== postData.ownerId) {
             return interaction.reply({ content: '❌ เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันครับ', ephemeral: true });
         }
@@ -183,7 +181,6 @@ client.on('interactionCreate', async interaction => {
             if (typeMatch) jobType = typeMatch[1].trim();
             if (detailsMatch) jobDetails = detailsMatch[1].trim();
 
-            // เปลี่ยนชื่อโพสต์เป็น วันที่ + ชื่อบริษัทลูกค้า
             const currentDate = new Date().toISOString().split('T')[0];
             const newThreadName = `${currentDate} - ${companyName}`;
 
@@ -193,7 +190,6 @@ client.on('interactionCreate', async interaction => {
                 console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
             }
 
-            // ส่ง Embed สรุปข้อมูลให้ทุกคนเห็นในเธรด
             const summaryEmbed = new EmbedBuilder()
                 .setTitle('📋 สรุปข้อมูลงานโรงกลึง')
                 .setColor(0x00FF00)
@@ -208,7 +204,6 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.channel.send({ embeds: [summaryEmbed] });
 
-            // ลบปุ่มทิ้งเมื่อกดยืนยันแล้ว (กดแล้วหายไป)
             if (postData.botMessage) {
                 await postData.botMessage.edit({
                     content: `✅ **ยืนยันและสรุปข้อมูลเรียบร้อยแล้วโดยคุณ ${employeeName}**`,
