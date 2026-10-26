@@ -36,8 +36,8 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            // ใช้โมเดล gemini-3.8 ตามที่คุณต้องการ
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8" });
+            // ใช้โมเดล gemini-3.8-flash ตามรุ่นล่าสุด
+            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
