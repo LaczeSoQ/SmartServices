@@ -56,7 +56,6 @@ const client = new Client({
     ]
 });
 
-// ใช้เก็บข้อมูลแยกตาม threadId ของใครของมันอย่างเด็ดขาด
 const postDataMap = new Map();
 
 client.once('ready', () => {
@@ -71,10 +70,14 @@ client.on('messageCreate', async message => {
         
         let postData = postDataMap.get(threadId);
         if (!postData) {
+            // สร้างข้อมูลเริ่มต้นของเธรด
             postData = {
                 ownerId: message.author.id,
                 contents: [message.content],
-                botMessage: null
+                botMessage: null,
+                isConfirmed: false,
+                summaryMessage: null,
+                currentSummary: null
             };
             postDataMap.set(threadId, postData);
 
@@ -90,8 +93,84 @@ client.on('messageCreate', async message => {
                 components: [confirmRow]
             });
         } else {
-            // บันทึกเฉพาะข้อความที่อยู่ในเธรดนี้เท่านั้น
-            postData.contents.push(message.content);
+            // ถ้าเคยยืนยันสรุปไปแล้ว และมีการพิมพ์ข้อความใหม่เข้ามา ถือเป็นการ "แก้ไข/เพิ่มเติมงาน"
+            if (postData.isConfirmed) {
+                try {
+                    await message.react('🔄'); // แสดงสถานะกำลังอัปเดต
+
+                    const updatePrompt = `ข้อมูลสรุปเดิม:
+- ชื่อบริษัทลูกค้า: ${postData.currentSummary.companyName}
+- ชื่อลูกค้า: ${postData.currentSummary.customerName}
+- ประเภทงาน: ${postData.currentSummary.jobType}
+- รายละเอียดงาน: ${postData.currentSummary.jobDetails}
+
+ข้อความแก้ไขหรือเพิ่มติมที่ส่งมาใหม่: "${message.content}"
+
+จงอัปเดตข้อมูลทั้งหมดให้สอดคล้องกับข้อความใหม่ โดยคงค่าเดิมไว้หากไม่มีการพูดถึงการเปลี่ยนแปลง และจัดรูปแบบการตอบดังนี้:
+- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
+- ชื่อลูกค้า: [ระบุชื่อลูกค้า]
+- ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
+- รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
+
+                    const aiResponse = await callGeminiWithFallback(updatePrompt);
+
+                    let companyName = postData.currentSummary.companyName;
+                    let customerName = postData.currentSummary.customerName;
+                    let jobType = postData.currentSummary.jobType;
+                    let jobDetails = postData.currentSummary.jobDetails;
+
+                    const companyMatch = aiResponse.match(/- ชื่อบริษัทลูกค้า:\s*(.*)/);
+                    const customerMatch = aiResponse.match(/- ชื่อลูกค้า:\s*(.*)/);
+                    const typeMatch = aiResponse.match(/- ประเภทงาน:\s*(.*)/);
+                    const detailsMatch = aiResponse.match(/- รายละเอียดงาน:\s*([\s\S]*)/);
+
+                    if (companyMatch) companyName = companyMatch[1].trim();
+                    if (customerMatch) customerName = customerMatch[1].trim();
+                    if (typeMatch) jobType = typeMatch[1].trim();
+                    if (detailsMatch) jobDetails = detailsMatch[1].trim();
+
+                    const currentDate = new Date().toISOString().split('T')[0];
+                    const newThreadName = `${currentDate} - ${companyName}`;
+
+                    try {
+                        await message.channel.setName(newThreadName);
+                    } catch (error) {
+                        console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
+                    }
+
+                    const employeeName = message.member ? message.member.displayName : message.author.username;
+
+                    const updatedEmbed = new EmbedBuilder()
+                        .setTitle('📋 สรุปข้อมูลงาน')
+                        .setColor(0x00FF00)
+                        .addFields(
+                            { name: '🏢 ชื่อบริษัทลูกค้า', value: companyName, inline: false },
+                            { name: '👤 ชื่อลูกค้า', value: customerName, inline: false },
+                            { name: '👨‍💻 ชื่อพนักงาน (ผู้บันทึก)', value: employeeName, inline: false },
+                            { name: '📌 ประเภทงาน', value: jobType, inline: false },
+                            { name: '⚙️ รายละเอียดงาน', value: jobDetails, inline: false }
+                        )
+                        .setTimestamp();
+
+                    // แก้ไขการ์ด Embed เดิมให้เป็นข้อมูลล่าสุดทันที
+                    if (postData.summaryMessage) {
+                        await postData.summaryMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
+                    }
+
+                    // บันทึกข้อมูลสรุปปัจจุบันเก็บไว้เทียบครั้งต่อไป
+                    postData.currentSummary = { companyName, customerName, jobType, jobDetails };
+
+                    await message.reactions.removeAll().catch(() => {});
+                    await message.react('✅').catch(() => {});
+
+                } catch (err) {
+                    console.error("Update Error:", err);
+                    await message.react('❌').catch(() => {});
+                }
+            } else {
+                // หากยังไม่ได้กดปุ่มยืนยัน ให้สะสมข้อความไว้ปกติ
+                postData.contents.push(message.content);
+            }
         }
     }
 });
@@ -105,7 +184,7 @@ client.on('interactionCreate', async interaction => {
 
         if (!postData) {
             return interaction.reply({ 
-                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ หรืออาจจะถูกสรุปไปแล้ว กรุณาลองใหม่อีกครั้ง', 
+                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', 
                 ephemeral: true 
             });
         }
@@ -140,7 +219,7 @@ client.on('interactionCreate', async interaction => {
 - ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
 - ชื่อลูกค้า: [ระบุชื่อลูกค้า]
 - ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
-- รายละเอียดงาน: [ระบุรายละเอียดงาน เช่น ตามรูปภาพตัวอย่าง/ข้อความ]`;
+- รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
 
             const aiResponse = await callGeminiWithFallback(prompt);
 
@@ -182,7 +261,7 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
-            await interaction.channel.send({ embeds: [summaryEmbed] });
+            const summaryEmbedMsg = await interaction.channel.send({ embeds: [summaryEmbed] });
 
             if (postData.botMessage) {
                 await postData.botMessage.edit({
@@ -191,8 +270,10 @@ client.on('interactionCreate', async interaction => {
                 }).catch(() => {});
             }
 
-            // ลบข้อมูลออกจาก Map ทันทีหลังจากสรุปเสร็จ เพื่อป้องกันข้อมูลข้ามโพสต์และประหยัดหน่วยความจำ
-            postDataMap.delete(threadId);
+            // บันทึกสถานะว่ายืนยันแล้ว และเก็บอ้างอิงการ์ด Embed ไว้เพื่อแก้ไขในอนาคตหากมีการพิมพ์แก้
+            postData.isConfirmed = true;
+            postData.summaryMessage = summaryEmbedMsg;
+            postData.currentSummary = { companyName, customerName, jobType, jobDetails };
 
         } catch (err) {
             console.error("Summary Error:", err);
