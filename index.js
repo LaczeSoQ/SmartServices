@@ -36,7 +36,6 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            // ใช้โมเดล gemini-3.8-flash ตามรุ่นล่าสุด
             const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
@@ -77,60 +76,20 @@ client.on('messageCreate', async message => {
                 botMessage: null
             };
             postDataMap.set(threadId, postData);
+
+            const confirmRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('confirm_summary')
+                    .setLabel('✅ ยืนยันข้อมูลและสรุปงาน')
+                    .setStyle(ButtonStyle.Success)
+            );
+
+            postData.botMessage = await message.reply({
+                content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
+                components: [confirmRow]
+            });
         } else {
             postData.contents.push(message.content);
-        }
-
-        const fullContent = postData.contents.join('\n');
-
-        try {
-            const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
-ตรวจสอบว่ามีข้อมูลครบถ้วนหรือไม่ (ต้องมี: ชื่อบริษัทลูกค้า, ชื่อลูกค้า, ประเภทงานว่า "ทำใหม่" หรือ "แก้ไข", และรายละเอียดงาน เช่น ขนาด วัสดุ จำนวน)
-หากข้อมูลไม่ครบ ให้ขึ้นต้นด้วยคำว่า "INCOMPLETE:" ตามด้วยสิ่งที่ขาดหายไปสั้นๆ
-หากข้อมูลครบ ให้ขึ้นต้นด้วยคำว่า "COMPLETE:" ตามด้วยข้อมูลในรูปแบบนี้:
-- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัทลูกค้า]
-- ชื่อลูกค้า: [ระบุชื่อลูกค้า]
-- ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
-- รายละเอียดงาน: [ระบุรายละเอียด ขนาด วัสดุ จำนวน]`;
-
-            const aiResponse = await callGeminiWithFallback(prompt);
-
-            if (aiResponse.includes('INCOMPLETE:')) {
-                const missingInfo = aiResponse.replace('INCOMPLETE:', '').trim();
-                const warningText = `⚠️ **ข้อมูลยังไม่ครบถ้วน:** ขาด (${missingInfo})\n> *กรุณาส่งข้อมูลมาเพิ่ม ระบบจะตรวจสอบให้อัตโนมัติครับ*`;
-                
-                if (postData.botMessage) {
-                    try {
-                        await postData.botMessage.edit({ content: warningText, components: [] });
-                    } catch (e) {
-                        postData.botMessage = await message.reply({ content: warningText });
-                    }
-                } else {
-                    postData.botMessage = await message.reply({ content: warningText });
-                }
-            } else {
-                const confirmRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('confirm_summary')
-                        .setLabel('✅ ยืนยันข้อมูลและสรุปงาน')
-                        .setStyle(ButtonStyle.Success)
-                );
-
-                const successText = `📌 **AI ตรวจสอบแล้ว:** ข้อมูลครบถ้วนสมบูรณ์!\n> **ถ้าข้อมูลถูกต้องให้กดยืนยันด้านล่าง** (หากยังต้องการแก้ไข พิมพ์ส่งมาเพิ่มได้ครับ)`;
-
-                if (postData.botMessage) {
-                    try {
-                        await postData.botMessage.edit({ content: successText, components: [confirmRow] });
-                    } catch (e) {
-                        postData.botMessage = await message.reply({ content: successText, components: [confirmRow] });
-                    }
-                } else {
-                    postData.botMessage = await message.reply({ content: successText, components: [confirmRow] });
-                }
-            }
-
-        } catch (err) {
-            console.error("AI Error:", err);
         }
     }
 });
@@ -156,11 +115,17 @@ client.on('interactionCreate', async interaction => {
 
         try {
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
-ดึงข้อมูลตามรูปแบบนี้:
-- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัทลูกค้า]
+วิเคราะห์และดึงข้อมูลตามเงื่อนไขนี้อย่างเคร่งครัด:
+1. ชื่อบริษัทลูกค้า: มักเป็นตัวย่อ/ชื่อย่อ (เช่น CGS)
+2. ชื่อลูกค้า: มักจะอยู่ต่อจากชื่อบริษัท (เช่น k.สาคร, ช่างสาคร)
+3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข"
+4. รายละเอียดงาน: หากมีคำว่า "ตามตัวอย่าง", "ตาม ตย.", "ตามรูป", "ตามไฟล์แนบ" ให้สรุปว่าอ้างอิงรายละเอียดตามรูปภาพตัวอย่างที่แนบมาด้วย
+
+จัดรูปแบบการตอบดังนี้:
+- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
 - ชื่อลูกค้า: [ระบุชื่อลูกค้า]
 - ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
-- รายละเอียดงาน: [ระบุรายละเอียด ขนาด วัสดุ จำนวน]`;
+- รายละเอียดงาน: [ระบุรายละเอียดงาน เช่น ตามรูปภาพตัวอย่าง/ข้อความ]`;
 
             const aiResponse = await callGeminiWithFallback(prompt);
 
@@ -190,8 +155,9 @@ client.on('interactionCreate', async interaction => {
                 console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
             }
 
+            // เปลี่ยนหัวข้อตรงนี้เป็น "📋 สรุปข้อมูลงาน"
             const summaryEmbed = new EmbedBuilder()
-                .setTitle('📋 สรุปข้อมูลงานโรงกลึง')
+                .setTitle('📋 สรุปข้อมูลงาน')
                 .setColor(0x00FF00)
                 .addFields(
                     { name: '🏢 ชื่อบริษัทลูกค้า', value: companyName, inline: false },
