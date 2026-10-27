@@ -46,7 +46,6 @@ async function callGeminiWithFallback(promptText) {
             } catch (error) {
                 console.warn(`⚠️ Key ที่ ${i + 1} (ครั้งที่ ${attempt}) ล้มเหลว:`, error.message);
                 lastError = error;
-                // ถ้าเจอ 503 หรือ High Demand ให้รอ 2 วินาทีก่อนรีไทรอัตโนมัติ
                 if (error.message.includes('503') || error.message.includes('overloaded')) {
                     await sleep(2000);
                 } else {
@@ -62,7 +61,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages
     ]
 });
 
@@ -82,6 +82,8 @@ client.on('messageCreate', async message => {
         if (!postData) {
             postData = {
                 ownerId: message.author.id,
+                guildId: message.guild.id,
+                threadId: threadId,
                 contents: [message.content],
                 botMessage: null
             };
@@ -94,10 +96,21 @@ client.on('messageCreate', async message => {
                     .setStyle(ButtonStyle.Success)
             );
 
-            postData.botMessage = await message.reply({
-                content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
-                components: [confirmRow]
-            });
+            // ส่งข้อความไปที่ DM ของเจ้าของโพสต์เพื่อให้เห็นคนเดียว (Only you see)
+            try {
+                const owner = message.author;
+                postData.botMessage = await owner.send({
+                    content: `📌 **ข้อมูลครบหรือยัง?** สำหรับเธรด **#${message.channel.name}** กดยืนยันด้านล่างได้เลย (หากมีข้อมูลเพิ่มสามารถพิมพ์ส่งในเธรดได้ปกติครับ)`,
+                    components: [confirmRow]
+                });
+            } catch (err) {
+                console.warn("ไม่สามารถส่ง DM หาเจ้าของโพสต์ได้ (อาจปิดรับ DM):", err.message);
+                // Fallback ส่งในเธรดปกติหากส่ง DM ไม่ได้
+                postData.botMessage = await message.reply({
+                    content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
+                    components: [confirmRow]
+                });
+            }
         } else {
             postData.contents.push(message.content);
         }
@@ -108,28 +121,37 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId === 'confirm_summary') {
-        const threadId = interaction.channel.id;
-        const postData = postDataMap.get(threadId);
+        // ค้นหาข้อมูลโพสต์จาก Map โดยเทียบจาก ID ข้อความปุ่มใน DM
+        let targetThreadId = null;
+        let targetPostData = null;
 
-        if (!postData) {
+        for (const [threadId, postData] of postDataMap.entries()) {
+            if (postData.botMessage && postData.botMessage.id === interaction.message.id) {
+                targetThreadId = threadId;
+                targetPostData = postData;
+                break;
+            }
+        }
+
+        if (!targetPostData) {
             return interaction.reply({ content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', ephemeral: true });
         }
 
-        if (interaction.user.id !== postData.ownerId) {
+        if (interaction.user.id !== targetPostData.ownerId) {
             return interaction.reply({ content: '❌ เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันครับ', ephemeral: true });
         }
 
         await interaction.deferUpdate();
 
-        // แจ้งสถานะกำลังประมวลผลทันทีที่กดปุ่ม
-        if (postData.botMessage) {
-            await postData.botMessage.edit({
-                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และลองใหม่อัตโนมัติหากเซิร์ฟเวอร์หนหน่วง)`,
+        // อัปเดตข้อความใน DM เป็นกำลังประมวลผล
+        if (targetPostData.botMessage) {
+            await targetPostData.botMessage.edit({
+                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และเปลี่ยนชื่อเธรด)`,
                 components: []
             }).catch(() => {});
         }
 
-        const fullContent = postData.contents.join('\n');
+        const fullContent = targetPostData.contents.join('\n');
 
         try {
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
@@ -167,8 +189,12 @@ client.on('interactionCreate', async interaction => {
             const currentDate = new Date().toISOString().split('T')[0];
             const newThreadName = `${currentDate} - ${companyName}`;
 
+            // ดึงข้อมูล Guild และ Thread เพื่อเปลี่ยนชื่อและส่งสรุป
+            const guild = await client.guilds.fetch(targetPostData.guildId);
+            const threadChannel = await guild.channels.fetch(targetThreadId);
+
             try {
-                await interaction.channel.setName(newThreadName);
+                await threadChannel.setName(newThreadName);
             } catch (error) {
                 console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
             }
@@ -185,10 +211,10 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
-            await interaction.channel.send({ embeds: [summaryEmbed] });
+            await threadChannel.send({ embeds: [summaryEmbed] });
 
-            if (postData.botMessage) {
-                await postData.botMessage.edit({
+            if (targetPostData.botMessage) {
+                await targetPostData.botMessage.edit({
                     content: `✅ **ยืนยันและสรุปข้อมูลเรียบร้อยแล้วโดยคุณ ${employeeName}**`,
                     components: []
                 }).catch(() => {});
@@ -196,8 +222,8 @@ client.on('interactionCreate', async interaction => {
 
         } catch (err) {
             console.error("Summary Error:", err);
-            if (postData.botMessage) {
-                await postData.botMessage.edit({
+            if (targetPostData.botMessage) {
+                await targetPostData.botMessage.edit({
                     content: `❌ เกิดข้อผิดพลาด: ${err.message}`,
                     components: []
                 }).catch(() => {});
