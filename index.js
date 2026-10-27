@@ -22,13 +22,15 @@ app.listen(PORT, () => {
 });
 
 async function callGeminiWithFallback(promptText) {
+    // รองรับ 3 API Keys แล้วครับ
     const apiKeys = [
         process.env.GEMINI_API_KEY_1,
-        process.env.GEMINI_API_KEY_2
+        process.env.GEMINI_API_KEY_2,
+        process.env.GEMINI_API_KEY_3
     ].filter(Boolean);
 
     if (apiKeys.length === 0) {
-        throw new Error("ยังไม่ได้ตั้งค่า GEMINI_API_KEY_1 หรือ GEMINI_API_KEY_2 ใน Environment Variables ของ Render");
+        throw new Error("ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Environment Variables ของ Render");
     }
 
     let lastError = null;
@@ -70,7 +72,6 @@ client.on('messageCreate', async message => {
         
         let postData = postDataMap.get(threadId);
         if (!postData) {
-            // สร้างข้อมูลเริ่มต้นของเธรด
             postData = {
                 ownerId: message.author.id,
                 contents: [message.content],
@@ -93,10 +94,9 @@ client.on('messageCreate', async message => {
                 components: [confirmRow]
             });
         } else {
-            // ถ้าเคยยืนยันสรุปไปแล้ว และมีการพิมพ์ข้อความใหม่เข้ามา ถือเป็นการ "แก้ไข/เพิ่มเติมงาน"
             if (postData.isConfirmed) {
                 try {
-                    await message.react('🔄'); // แสดงสถานะกำลังอัปเดต
+                    await message.react('🔄');
 
                     const updatePrompt = `ข้อมูลสรุปเดิม:
 - ชื่อบริษัทลูกค้า: ${postData.currentSummary.companyName}
@@ -152,12 +152,10 @@ client.on('messageCreate', async message => {
                         )
                         .setTimestamp();
 
-                    // แก้ไขการ์ด Embed เดิมให้เป็นข้อมูลล่าสุดทันที
                     if (postData.summaryMessage) {
                         await postData.summaryMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
                     }
 
-                    // บันทึกข้อมูลสรุปปัจจุบันเก็บไว้เทียบครั้งต่อไป
                     postData.currentSummary = { companyName, customerName, jobType, jobDetails };
 
                     await message.reactions.removeAll().catch(() => {});
@@ -168,7 +166,6 @@ client.on('messageCreate', async message => {
                     await message.react('❌').catch(() => {});
                 }
             } else {
-                // หากยังไม่ได้กดปุ่มยืนยัน ให้สะสมข้อความไว้ปกติ
                 postData.contents.push(message.content);
             }
         }
@@ -270,7 +267,6 @@ client.on('interactionCreate', async interaction => {
                 }).catch(() => {});
             }
 
-            // บันทึกสถานะว่ายืนยันแล้ว และเก็บอ้างอิงการ์ด Embed ไว้เพื่อแก้ไขในอนาคตหากมีการพิมพ์แก้
             postData.isConfirmed = true;
             postData.summaryMessage = summaryEmbedMsg;
             postData.currentSummary = { companyName, customerName, jobType, jobDetails };
