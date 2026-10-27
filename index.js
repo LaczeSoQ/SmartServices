@@ -21,6 +21,8 @@ app.listen(PORT, () => {
     console.log(`Owner Server listening on port ${PORT}`);
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function callGeminiWithFallback(promptText) {
     const apiKeys = [
         process.env.GEMINI_API_KEY_1,
@@ -33,16 +35,24 @@ async function callGeminiWithFallback(promptText) {
 
     let lastError = null;
     for (let i = 0; i < apiKeys.length; i++) {
-        try {
-            console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
-            const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
-            const result = await model.generateContent(promptText);
-            const response = await result.response;
-            return response.text();
-        } catch (error) {
-            console.warn(`⚠️ Gemini API Key ที่ ${i + 1} ล้มเหลว:`, error.message);
-            lastError = error;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1} (พยายามครั้งที่ ${attempt})...`);
+                const genAI = new GoogleGenerativeAI(apiKeys[i]);
+                const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+                const result = await model.generateContent(promptText);
+                const response = await result.response;
+                return response.text();
+            } catch (error) {
+                console.warn(`⚠️ Key ที่ ${i + 1} (ครั้งที่ ${attempt}) ล้มเหลว:`, error.message);
+                lastError = error;
+                // ถ้าเจอ 503 หรือ High Demand ให้รอ 2 วินาทีก่อนรีไทรอัตโนมัติ
+                if (error.message.includes('503') || error.message.includes('overloaded')) {
+                    await sleep(2000);
+                } else {
+                    break;
+                }
+            }
         }
     }
     throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError ? lastError.message : 'Unknown error'}`);
@@ -111,13 +121,21 @@ client.on('interactionCreate', async interaction => {
 
         await interaction.deferUpdate();
 
+        // แจ้งสถานะกำลังประมวลผลทันทีที่กดปุ่ม
+        if (postData.botMessage) {
+            await postData.botMessage.edit({
+                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และลองใหม่อัตโนมัติหากเซิร์ฟเวอร์หนหน่วง)`,
+                components: []
+            }).catch(() => {});
+        }
+
         const fullContent = postData.contents.join('\n');
 
         try {
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
 วิเคราะห์และดึงข้อมูลตามเงื่อนไขนี้อย่างเคร่งครัด:
 1. ชื่อบริษัทลูกค้า: มักเป็นตัวย่อ/ชื่อย่อ (เช่น CGS)
-2. ชื่อลูกค้า: มักจะอยู่ต่อจากชื่อบริษัท (เช่น k.สาคร, ช่างสาคร)
+2. ชื่อลูกค้า: มักจะมีคำว่า "k.", "คุณ", หรือชื่อบุคคลต่อท้ายชื่อบริษัท (เช่น k.สาคร, คุณสาคร, ช่างสาคร) ห้ามสับสนกับชื่อบริษัท
 3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข"
 4. รายละเอียดงาน: หากมีคำว่า "ตามตัวอย่าง", "ตาม ตย.", "ตามรูป", "ตามไฟล์แนบ" ให้สรุปว่าอ้างอิงรายละเอียดตามรูปภาพตัวอย่างที่แนบมาด้วย
 
@@ -155,7 +173,6 @@ client.on('interactionCreate', async interaction => {
                 console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
             }
 
-            // เปลี่ยนหัวข้อตรงนี้เป็น "📋 สรุปข้อมูลงาน"
             const summaryEmbed = new EmbedBuilder()
                 .setTitle('📋 สรุปข้อมูลงาน')
                 .setColor(0x00FF00)
@@ -179,7 +196,12 @@ client.on('interactionCreate', async interaction => {
 
         } catch (err) {
             console.error("Summary Error:", err);
-            await interaction.followUp({ content: `❌ เกิดข้อผิดพลาด: ${err.message}`, ephemeral: true });
+            if (postData.botMessage) {
+                await postData.botMessage.edit({
+                    content: `❌ เกิดข้อผิดพลาด: ${err.message}`,
+                    components: []
+                }).catch(() => {});
+            }
         }
     }
 });
