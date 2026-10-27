@@ -22,7 +22,6 @@ app.listen(PORT, () => {
 });
 
 async function callGeminiWithFallback(promptText) {
-    // รองรับ 3 API Keys แล้วครับ
     const apiKeys = [
         process.env.GEMINI_API_KEY_1,
         process.env.GEMINI_API_KEY_2,
@@ -48,6 +47,34 @@ async function callGeminiWithFallback(promptText) {
         }
     }
     throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError ? lastError.message : 'Unknown error'}`);
+}
+
+// ฟังก์ชันแกะข้อมูลแบบแม่นยำ ป้องกันปัญหาเครื่องหมาย Markdown เกิน
+function parseAiResponse(aiResponse, fallbackDetails) {
+    let companyName = "ไม่ระบุชื่อบริษัท";
+    let customerName = "ไม่ระบุชื่อลูกค้า";
+    let jobType = "ทำใหม่";
+    let jobDetails = fallbackDetails;
+
+    const lines = aiResponse.split('\n');
+    for (const line of lines) {
+        const cleanLine = line.replace(/[*_`]/g, '').trim();
+        if (cleanLine.includes('ชื่อบริษัทลูกค้า')) {
+            const parts = cleanLine.split(':');
+            if (parts[1] && parts[1].trim()) companyName = parts[1].trim();
+        } else if (cleanLine.includes('ชื่อลูกค้า')) {
+            const parts = cleanLine.split(':');
+            if (parts[1] && parts[1].trim()) customerName = parts[1].trim();
+        } else if (cleanLine.includes('ประเภทงาน')) {
+            const parts = cleanLine.split(':');
+            if (parts[1] && parts[1].trim()) jobType = parts[1].trim();
+        } else if (cleanLine.includes('รายละเอียดงาน')) {
+            const parts = cleanLine.split(':');
+            if (parts[1] && parts[1].trim()) jobDetails = parts[1].trim();
+        }
+    }
+
+    return { companyName, customerName, jobType, jobDetails };
 }
 
 const client = new Client({
@@ -113,24 +140,10 @@ client.on('messageCreate', async message => {
 - รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
 
                     const aiResponse = await callGeminiWithFallback(updatePrompt);
-
-                    let companyName = postData.currentSummary.companyName;
-                    let customerName = postData.currentSummary.customerName;
-                    let jobType = postData.currentSummary.jobType;
-                    let jobDetails = postData.currentSummary.jobDetails;
-
-                    const companyMatch = aiResponse.match(/- ชื่อบริษัทลูกค้า:\s*(.*)/);
-                    const customerMatch = aiResponse.match(/- ชื่อลูกค้า:\s*(.*)/);
-                    const typeMatch = aiResponse.match(/- ประเภทงาน:\s*(.*)/);
-                    const detailsMatch = aiResponse.match(/- รายละเอียดงาน:\s*([\s\S]*)/);
-
-                    if (companyMatch) companyName = companyMatch[1].trim();
-                    if (customerMatch) customerName = customerMatch[1].trim();
-                    if (typeMatch) jobType = typeMatch[1].trim();
-                    if (detailsMatch) jobDetails = detailsMatch[1].trim();
+                    const parsed = parseAiResponse(aiResponse, postData.currentSummary.jobDetails);
 
                     const currentDate = new Date().toISOString().split('T')[0];
-                    const newThreadName = `${currentDate} - ${companyName}`;
+                    const newThreadName = `${currentDate} - ${parsed.companyName}`;
 
                     try {
                         await message.channel.setName(newThreadName);
@@ -144,11 +157,11 @@ client.on('messageCreate', async message => {
                         .setTitle('📋 สรุปข้อมูลงาน')
                         .setColor(0x00FF00)
                         .addFields(
-                            { name: '🏢 ชื่อบริษัทลูกค้า', value: companyName, inline: false },
-                            { name: '👤 ชื่อลูกค้า', value: customerName, inline: false },
+                            { name: '🏢 ชื่อบริษัทลูกค้า', value: parsed.companyName, inline: false },
+                            { name: '👤 ชื่อลูกค้า', value: parsed.customerName, inline: false },
                             { name: '👨‍💻 ชื่อพนักงาน (ผู้บันทึก)', value: employeeName, inline: false },
-                            { name: '📌 ประเภทงาน', value: jobType, inline: false },
-                            { name: '⚙️ รายละเอียดงาน', value: jobDetails, inline: false }
+                            { name: '📌 ประเภทงาน', value: parsed.jobType, inline: false },
+                            { name: '⚙️ รายละเอียดงาน', value: parsed.jobDetails, inline: false }
                         )
                         .setTimestamp();
 
@@ -156,7 +169,7 @@ client.on('messageCreate', async message => {
                         await postData.summaryMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
                     }
 
-                    postData.currentSummary = { companyName, customerName, jobType, jobDetails };
+                    postData.currentSummary = parsed;
 
                     await message.reactions.removeAll().catch(() => {});
                     await message.react('✅').catch(() => {});
@@ -219,26 +232,11 @@ client.on('interactionCreate', async interaction => {
 - รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
 
             const aiResponse = await callGeminiWithFallback(prompt);
+            const parsed = parseAiResponse(aiResponse, fullContent);
 
             const employeeName = interaction.member ? interaction.member.displayName : interaction.user.username;
-
-            let companyName = "ไม่ระบุชื่อบริษัท";
-            let customerName = "ไม่ระบุชื่อลูกค้า";
-            let jobType = "ทำใหม่";
-            let jobDetails = fullContent;
-
-            const companyMatch = aiResponse.match(/- ชื่อบริษัทลูกค้า:\s*(.*)/);
-            const customerMatch = aiResponse.match(/- ชื่อลูกค้า:\s*(.*)/);
-            const typeMatch = aiResponse.match(/- ประเภทงาน:\s*(.*)/);
-            const detailsMatch = aiResponse.match(/- รายละเอียดงาน:\s*([\s\S]*)/);
-
-            if (companyMatch) companyName = companyMatch[1].trim();
-            if (customerMatch) customerName = customerMatch[1].trim();
-            if (typeMatch) jobType = typeMatch[1].trim();
-            if (detailsMatch) jobDetails = detailsMatch[1].trim();
-
             const currentDate = new Date().toISOString().split('T')[0];
-            const newThreadName = `${currentDate} - ${companyName}`;
+            const newThreadName = `${currentDate} - ${parsed.companyName}`;
 
             try {
                 await interaction.channel.setName(newThreadName);
@@ -250,11 +248,11 @@ client.on('interactionCreate', async interaction => {
                 .setTitle('📋 สรุปข้อมูลงาน')
                 .setColor(0x00FF00)
                 .addFields(
-                    { name: '🏢 ชื่อบริษัทลูกค้า', value: companyName, inline: false },
-                    { name: '👤 ชื่อลูกค้า', value: customerName, inline: false },
+                    { name: '🏢 ชื่อบริษัทลูกค้า', value: parsed.companyName, inline: false },
+                    { name: '👤 ชื่อลูกค้า', value: parsed.customerName, inline: false },
                     { name: '👨‍💻 ชื่อพนักงาน (ผู้บันทึก)', value: employeeName, inline: false },
-                    { name: '📌 ประเภทงาน', value: jobType, inline: false },
-                    { name: '⚙️ รายละเอียดงาน', value: jobDetails, inline: false }
+                    { name: '📌 ประเภทงาน', value: parsed.jobType, inline: false },
+                    { name: '⚙️ รายละเอียดงาน', value: parsed.jobDetails, inline: false }
                 )
                 .setTimestamp();
 
@@ -269,7 +267,7 @@ client.on('interactionCreate', async interaction => {
 
             postData.isConfirmed = true;
             postData.summaryMessage = summaryEmbedMsg;
-            postData.currentSummary = { companyName, customerName, jobType, jobDetails };
+            postData.currentSummary = parsed;
 
         } catch (err) {
             console.error("Summary Error:", err);
