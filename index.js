@@ -21,8 +21,6 @@ app.listen(PORT, () => {
     console.log(`Owner Server listening on port ${PORT}`);
 });
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function callGeminiWithFallback(promptText) {
     const apiKeys = [
         process.env.GEMINI_API_KEY_1,
@@ -35,23 +33,16 @@ async function callGeminiWithFallback(promptText) {
 
     let lastError = null;
     for (let i = 0; i < apiKeys.length; i++) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-                console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1} (พยายามครั้งที่ ${attempt})...`);
-                const genAI = new GoogleGenerativeAI(apiKeys[i]);
-                const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
-                const result = await model.generateContent(promptText);
-                const response = await result.response;
-                return response.text();
-            } catch (error) {
-                console.warn(`⚠️ Key ที่ ${i + 1} (ครั้งที่ ${attempt}) ล้มเหลว:`, error.message);
-                lastError = error;
-                if (error.message.includes('503') || error.message.includes('overloaded')) {
-                    await sleep(2000);
-                } else {
-                    break;
-                }
-            }
+        try {
+            console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
+            const genAI = new GoogleGenerativeAI(apiKeys[i]);
+            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const result = await model.generateContent(promptText);
+            const response = await result.response;
+            return response.text();
+        } catch (error) {
+            console.warn(`⚠️ Key ที่ ${i + 1} ล้มเหลว:`, error.message);
+            lastError = error;
         }
     }
     throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError ? lastError.message : 'Unknown error'}`);
@@ -65,6 +56,7 @@ const client = new Client({
     ]
 });
 
+// ใช้เก็บข้อมูลแยกตาม threadId ของใครของมันอย่างเด็ดขาด
 const postDataMap = new Map();
 
 client.once('ready', () => {
@@ -93,12 +85,12 @@ client.on('messageCreate', async message => {
                     .setStyle(ButtonStyle.Success)
             );
 
-            // ส่งข้อความถามในเธรดปกติ
             postData.botMessage = await message.reply({
                 content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
                 components: [confirmRow]
             });
         } else {
+            // บันทึกเฉพาะข้อความที่อยู่ในเธรดนี้เท่านั้น
             postData.contents.push(message.content);
         }
     }
@@ -113,7 +105,7 @@ client.on('interactionCreate', async interaction => {
 
         if (!postData) {
             return interaction.reply({ 
-                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', 
+                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ หรืออาจจะถูกสรุปไปแล้ว กรุณาลองใหม่อีกครั้ง', 
                 ephemeral: true 
             });
         }
@@ -127,10 +119,9 @@ client.on('interactionCreate', async interaction => {
 
         await interaction.deferUpdate();
 
-        // อัปเดตข้อความในเธรดเป็นกำลังประมวลผล
         if (postData.botMessage) {
             await postData.botMessage.edit({
-                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และลองใหม่อัตโนมัติหากเซิร์ฟเวอร์หน่วง)`,
+                content: `⏳ **กำลังประมวลผล...**`,
                 components: []
             }).catch(() => {});
         }
@@ -200,16 +191,17 @@ client.on('interactionCreate', async interaction => {
                 }).catch(() => {});
             }
 
+            // ลบข้อมูลออกจาก Map ทันทีหลังจากสรุปเสร็จ เพื่อป้องกันข้อมูลข้ามโพสต์และประหยัดหน่วยความจำ
+            postDataMap.delete(threadId);
+
         } catch (err) {
             console.error("Summary Error:", err);
             
-            // หากเกิดข้อผิดพลาด (เช่น 503) จะส่งข้อความแจ้งเตือนแบบ Ephemeral (กด Dismiss ได้) ให้เห็นเฉพาะตัวบุคคล
             await interaction.followUp({ 
                 content: `❌ เกิดข้อผิดพลาด: ${err.message}`, 
                 ephemeral: true 
             });
 
-            // คืนค่าปุ่มยืนยันกลับมาในเธรดเพื่อให้ลองกดใหม่ได้
             if (postData.botMessage) {
                 const confirmRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
