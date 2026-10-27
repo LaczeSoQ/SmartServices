@@ -61,8 +61,7 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages
+        GatewayIntentBits.MessageContent
     ]
 });
 
@@ -82,8 +81,6 @@ client.on('messageCreate', async message => {
         if (!postData) {
             postData = {
                 ownerId: message.author.id,
-                guildId: message.guild.id,
-                threadId: threadId,
                 contents: [message.content],
                 botMessage: null
             };
@@ -96,21 +93,11 @@ client.on('messageCreate', async message => {
                     .setStyle(ButtonStyle.Success)
             );
 
-            // ส่งข้อความไปที่ DM ของเจ้าของโพสต์เพื่อให้เห็นคนเดียว (Only you see)
-            try {
-                const owner = message.author;
-                postData.botMessage = await owner.send({
-                    content: `📌 **ข้อมูลครบหรือยัง?** สำหรับเธรด **#${message.channel.name}** กดยืนยันด้านล่างได้เลย (หากมีข้อมูลเพิ่มสามารถพิมพ์ส่งในเธรดได้ปกติครับ)`,
-                    components: [confirmRow]
-                });
-            } catch (err) {
-                console.warn("ไม่สามารถส่ง DM หาเจ้าของโพสต์ได้ (อาจปิดรับ DM):", err.message);
-                // Fallback ส่งในเธรดปกติหากส่ง DM ไม่ได้
-                postData.botMessage = await message.reply({
-                    content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
-                    components: [confirmRow]
-                });
-            }
+            // ส่งข้อความถามในเธรดปกติ
+            postData.botMessage = await message.reply({
+                content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
+                components: [confirmRow]
+            });
         } else {
             postData.contents.push(message.content);
         }
@@ -121,37 +108,34 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId === 'confirm_summary') {
-        // ค้นหาข้อมูลโพสต์จาก Map โดยเทียบจาก ID ข้อความปุ่มใน DM
-        let targetThreadId = null;
-        let targetPostData = null;
+        const threadId = interaction.channel.id;
+        const postData = postDataMap.get(threadId);
 
-        for (const [threadId, postData] of postDataMap.entries()) {
-            if (postData.botMessage && postData.botMessage.id === interaction.message.id) {
-                targetThreadId = threadId;
-                targetPostData = postData;
-                break;
-            }
+        if (!postData) {
+            return interaction.reply({ 
+                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', 
+                ephemeral: true 
+            });
         }
 
-        if (!targetPostData) {
-            return interaction.reply({ content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', ephemeral: true });
-        }
-
-        if (interaction.user.id !== targetPostData.ownerId) {
-            return interaction.reply({ content: '❌ เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันครับ', ephemeral: true });
+        if (interaction.user.id !== postData.ownerId) {
+            return interaction.reply({ 
+                content: '❌ เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันครับ', 
+                ephemeral: true 
+            });
         }
 
         await interaction.deferUpdate();
 
-        // อัปเดตข้อความใน DM เป็นกำลังประมวลผล
-        if (targetPostData.botMessage) {
-            await targetPostData.botMessage.edit({
-                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และเปลี่ยนชื่อเธรด)`,
+        // อัปเดตข้อความในเธรดเป็นกำลังประมวลผล
+        if (postData.botMessage) {
+            await postData.botMessage.edit({
+                content: `⏳ **กำลังประมวลผล...** (ระบบกำลังเรียกใช้งาน AI และลองใหม่อัตโนมัติหากเซิร์ฟเวอร์หน่วง)`,
                 components: []
             }).catch(() => {});
         }
 
-        const fullContent = targetPostData.contents.join('\n');
+        const fullContent = postData.contents.join('\n');
 
         try {
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
@@ -189,12 +173,8 @@ client.on('interactionCreate', async interaction => {
             const currentDate = new Date().toISOString().split('T')[0];
             const newThreadName = `${currentDate} - ${companyName}`;
 
-            // ดึงข้อมูล Guild และ Thread เพื่อเปลี่ยนชื่อและส่งสรุป
-            const guild = await client.guilds.fetch(targetPostData.guildId);
-            const threadChannel = await guild.channels.fetch(targetThreadId);
-
             try {
-                await threadChannel.setName(newThreadName);
+                await interaction.channel.setName(newThreadName);
             } catch (error) {
                 console.error('ไม่สามารถเปลี่ยนชื่อ Thread ได้:', error);
             }
@@ -211,10 +191,10 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
-            await threadChannel.send({ embeds: [summaryEmbed] });
+            await interaction.channel.send({ embeds: [summaryEmbed] });
 
-            if (targetPostData.botMessage) {
-                await targetPostData.botMessage.edit({
+            if (postData.botMessage) {
+                await postData.botMessage.edit({
                     content: `✅ **ยืนยันและสรุปข้อมูลเรียบร้อยแล้วโดยคุณ ${employeeName}**`,
                     components: []
                 }).catch(() => {});
@@ -222,10 +202,24 @@ client.on('interactionCreate', async interaction => {
 
         } catch (err) {
             console.error("Summary Error:", err);
-            if (targetPostData.botMessage) {
-                await targetPostData.botMessage.edit({
-                    content: `❌ เกิดข้อผิดพลาด: ${err.message}`,
-                    components: []
+            
+            // หากเกิดข้อผิดพลาด (เช่น 503) จะส่งข้อความแจ้งเตือนแบบ Ephemeral (กด Dismiss ได้) ให้เห็นเฉพาะตัวบุคคล
+            await interaction.followUp({ 
+                content: `❌ เกิดข้อผิดพลาด: ${err.message}`, 
+                ephemeral: true 
+            });
+
+            // คืนค่าปุ่มยืนยันกลับมาในเธรดเพื่อให้ลองกดใหม่ได้
+            if (postData.botMessage) {
+                const confirmRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('confirm_summary')
+                        .setLabel('✅ ยืนยันข้อมูลและสรุปงาน')
+                        .setStyle(ButtonStyle.Success)
+                );
+                await postData.botMessage.edit({
+                    content: `📌 **ข้อมูลครบหรือยัง?** (ระบบ AI ขัดข้องชั่วคราว สามารถกดยืนยันใหม่อีกครั้งได้เลยครับ)`,
+                    components: [confirmRow]
                 }).catch(() => {});
             }
         }
