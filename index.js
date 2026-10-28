@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const { 
@@ -21,6 +22,9 @@ app.listen(PORT, () => {
     console.log(`Owner Server listening on port ${PORT}`);
 });
 
+// ฟังก์ชันหน่วงเวลา (มิลลิวินาที)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function callGeminiWithFallback(promptText) {
     const apiKeys = [
         process.env.GEMINI_API_KEY_1,
@@ -32,21 +36,32 @@ async function callGeminiWithFallback(promptText) {
         throw new Error("ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Environment Variables ของ Render");
     }
 
+    // ลิสต์โมเดลเรียงตามลำดับความเสถียรและความเร็ว
+    const modelsToTry = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash"
+    ];
+    
     let lastError = null;
-    for (let i = 0; i < apiKeys.length; i++) {
-        try {
-            console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
-            const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
-            const result = await model.generateContent(promptText);
-            const response = await result.response;
-            return response.text();
-        } catch (error) {
-            console.warn(`⚠️ Key ที่ ${i + 1} ล้มเหลว:`, error.message);
-            lastError = error;
+
+    // วนลูปสลับทั้งโมเดลและ API Key เพื่อป้องกันปัญหา Error 503
+    for (const modelName of modelsToTry) {
+        for (let i = 0; i < apiKeys.length; i++) {
+            try {
+                console.log(`กำลังเรียกใช้ ${modelName} ด้วย Key ที่ ${i + 1}...`);
+                const genAI = new GoogleGenerativeAI(apiKeys[i]);
+                const model = genAI.getGenerativeModel({ model: modelName });
+                const result = await model.generateContent(promptText);
+                const response = await result.response;
+                return response.text();
+            } catch (error) {
+                console.warn(`⚠️ ${modelName} (Key ${i + 1}) ล้มเหลว:`, error.message);
+                lastError = error;
+                await sleep(1500); // หน่วงเวลา 1.5 วินาทีก่อนสลับไปตัวถัดไป
+            }
         }
     }
-    throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError ? lastError.message : 'Unknown error'}`);
+    throw new Error(`Gemini API ล้มเหลวทุก Key และทุก Model: ${lastError ? lastError.message : 'Unknown error'}`);
 }
 
 function parseAiResponse(aiResponse, fallbackDetails) {
@@ -233,7 +248,6 @@ client.on('interactionCreate', async interaction => {
                 ephemeral: true 
             });
 
-            // คืนค่าปุ่มยืนยันกลับมาใหม่เมื่อเกิดข้อผิดพลาด
             if (postData.botMessage) {
                 const retryRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
@@ -319,7 +333,6 @@ client.on('interactionCreate', async interaction => {
                 ephemeral: true 
             });
 
-            // คืนค่าปุ่มอัปเดตกลับมาใหม่เมื่อเกิดข้อผิดพลาด
             if (postData.updateBotMessage) {
                 const retryUpdateRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
