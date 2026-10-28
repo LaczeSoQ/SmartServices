@@ -37,7 +37,7 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
@@ -123,7 +123,6 @@ client.on('messageCreate', async message => {
             });
         } else {
             if (postData.isConfirmed) {
-                // บันทึกข้อความที่พิมพ์เพิ่มไว้ชั่วคราว
                 postData.pendingUpdateContent = message.content;
 
                 const updateRow = new ActionRowBuilder().addComponents(
@@ -133,7 +132,6 @@ client.on('messageCreate', async message => {
                         .setStyle(ButtonStyle.Primary)
                 );
 
-                // ส่งปุ่มให้กดยืนยันการแก้ไขข้อมูล
                 if (postData.updateBotMessage) {
                     await postData.updateBotMessage.delete().catch(() => {});
                 }
@@ -229,7 +227,25 @@ client.on('interactionCreate', async interaction => {
 
         } catch (err) {
             console.error("Summary Error:", err);
-            await interaction.followUp({ content: `❌ เกิดข้อผิดพลาด: ${err.message}`, ephemeral: true });
+            
+            await interaction.followUp({ 
+                content: `❌ เกิดข้อผิดพลาด: ${err.message}`, 
+                ephemeral: true 
+            });
+
+            // คืนค่าปุ่มยืนยันกลับมาใหม่เมื่อเกิดข้อผิดพลาด
+            if (postData.botMessage) {
+                const retryRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('confirm_summary')
+                        .setLabel('✅ ยืนยันข้อมูลและสรุปงาน')
+                        .setStyle(ButtonStyle.Success)
+                );
+                await interaction.editReply({
+                    content: `❌ **เกิดข้อผิดพลาดในการประมวลผล:** ${err.message}\n(สามารถกดยืนยันใหม่อีกครั้งได้เลยครับ)`,
+                    components: [retryRow]
+                }).catch(() => {});
+            }
         }
     }
 
@@ -281,15 +297,12 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
-            // ส่งการ์ดสรุปอันใหม่ลงเธรด
             const newSummaryMsg = await interaction.channel.send({ embeds: [updatedEmbed] });
 
-            // ลบการ์ดสรุปอันเก่าทิ้ง
             if (postData.summaryMessage) {
                 await postData.summaryMessage.delete().catch(() => {});
             }
 
-            // ลบข้อความปุ่มอัปเดตทิ้ง
             if (postData.updateBotMessage) {
                 await postData.updateBotMessage.delete().catch(() => {});
             }
@@ -300,7 +313,25 @@ client.on('interactionCreate', async interaction => {
 
         } catch (err) {
             console.error("Update Error:", err);
-            await interaction.followUp({ content: `❌ เกิดข้อผิดพลาดในการอัปเดต: ${err.message}`, ephemeral: true });
+            
+            await interaction.followUp({ 
+                content: `❌ เกิดข้อผิดพลาดในการอัปเดต: ${err.message}`, 
+                ephemeral: true 
+            });
+
+            // คืนค่าปุ่มอัปเดตกลับมาใหม่เมื่อเกิดข้อผิดพลาด
+            if (postData.updateBotMessage) {
+                const retryUpdateRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('confirm_update')
+                        .setLabel('🔄 อัปเดตข้อมูลสรุป')
+                        .setStyle(ButtonStyle.Primary)
+                );
+                await interaction.editReply({
+                    content: `❌ **เกิดข้อผิดพลาดในการอัปเดต:** ${err.message}\n(สามารถกดปุ่มอัปเดตใหม่อีกครั้งได้เลยครับ)`,
+                    components: [retryUpdateRow]
+                }).catch(() => {});
+            }
         }
     }
 });
