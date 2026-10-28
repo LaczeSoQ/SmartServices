@@ -37,7 +37,7 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
@@ -52,7 +52,7 @@ async function callGeminiWithFallback(promptText) {
 function parseAiResponse(aiResponse, fallbackDetails) {
     let companyName = "ไม่ระบุชื่อบริษัท";
     let customerName = "ไม่ระบุชื่อลูกค้า";
-    let jobType = "ทำใหม่";
+    let jobType = "ไม่ระบุ"; // ค่าเริ่มต้นเปลี่ยนเป็น "ไม่ระบุ"
     let jobDetails = fallbackDetails;
 
     const lines = aiResponse.split('\n');
@@ -135,7 +135,7 @@ client.on('messageCreate', async message => {
 จงอัปเดตข้อมูลทั้งหมดให้สอดคล้องกับข้อความใหม่ โดยคงค่าเดิมไว้หากไม่มีการพูดถึงการเปลี่ยนแปลง และจัดรูปแบบการตอบดังนี้:
 - ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
 - ชื่อลูกค้า: [ระบุชื่อลูกค้า]
-- ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
+- ประเภทงาน: [ทำใหม่, แก้ไข, หรือ หากไม่ระบุให้ตอบว่า ไม่ระบุ]
 - รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
 
                     const aiResponse = await callGeminiWithFallback(updatePrompt);
@@ -205,7 +205,11 @@ client.on('interactionCreate', async interaction => {
             });
         }
 
-        await interaction.deferUpdate();
+        // แจ้งตอบรับปุ่มและเปลี่ยนข้อความเป็นกำลังประมวลผลทันที
+        await interaction.update({
+            content: `⏳ **กำลังประมวลผลข้อมูลด้วย AI...**`,
+            components: []
+        });
 
         const fullContent = postData.contents.join('\n');
 
@@ -214,13 +218,13 @@ client.on('interactionCreate', async interaction => {
 วิเคราะห์และดึงข้อมูลตามเงื่อนไขนี้อย่างเคร่งครัด:
 1. ชื่อบริษัทลูกค้า: มักเป็นตัวย่อ/ชื่อย่อ (เช่น CGS)
 2. ชื่อลูกค้า: มักจะมีคำว่า "k.", "คุณ", หรือชื่อบุคคลต่อท้ายชื่อบริษัท (เช่น k.สาคร, คุณสาคร, ช่างสาคร) ห้ามสับสนกับชื่อบริษัท
-3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข"
+3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข" แต่ถ้าในข้อความไม่ได้ระบุประเภทงานมาเลย ให้ตอบว่า "ไม่ระบุ"
 4. รายละเอียดงาน: หากมีคำว่า "ตามตัวอย่าง", "ตาม ตย.", "ตามรูป", "ตามไฟล์แนบ" ให้สรุปว่าอ้างอิงรายละเอียดตามรูปภาพตัวอย่างที่แนบมาด้วย
 
 จัดรูปแบบการตอบดังนี้:
 - ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
 - ชื่อลูกค้า: [ระบุชื่อลูกค้า]
-- ประเภทงาน: [ทำใหม่ หรือ แก้ไข]
+- ประเภทงาน: [ทำใหม่, แก้ไข, หรือ ไม่ระบุ]
 - รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
 
             const aiResponse = await callGeminiWithFallback(prompt);
@@ -250,7 +254,7 @@ client.on('interactionCreate', async interaction => {
 
             const summaryEmbedMsg = await interaction.channel.send({ embeds: [summaryEmbed] });
 
-            // ลบข้อความปุ่มกดเก่าทิ้งทันทีหลังจากสรุปงานสำเร็จ
+            // ลบข้อความที่ขึ้นว่ากำลังประมวลผลทิ้งทันทีหลังสรุปงานเสร็จ
             if (postData.botMessage) {
                 await postData.botMessage.delete().catch(() => {});
             }
