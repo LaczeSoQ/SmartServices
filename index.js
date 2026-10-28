@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const { 
@@ -36,15 +35,13 @@ async function callGeminiWithFallback(promptText) {
         throw new Error("ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Environment Variables ของ Render");
     }
 
-    // ลิสต์โมเดลเรียงตามลำดับความเสถียรและความเร็ว
     const modelsToTry = [
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash"
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
     ];
     
     let lastError = null;
 
-    // วนลูปสลับทั้งโมเดลและ API Key เพื่อป้องกันปัญหา Error 503
     for (const modelName of modelsToTry) {
         for (let i = 0; i < apiKeys.length; i++) {
             try {
@@ -57,7 +54,7 @@ async function callGeminiWithFallback(promptText) {
             } catch (error) {
                 console.warn(`⚠️ ${modelName} (Key ${i + 1}) ล้มเหลว:`, error.message);
                 lastError = error;
-                await sleep(1500); // หน่วงเวลา 1.5 วินาทีก่อนสลับไปตัวถัดไป
+                await sleep(2000);
             }
         }
     }
@@ -65,26 +62,26 @@ async function callGeminiWithFallback(promptText) {
 }
 
 function parseAiResponse(aiResponse, fallbackDetails) {
-    let companyName = "ไม่ระบุชื่อบริษัท";
-    let customerName = "ไม่ระบุชื่อลูกค้า";
+    let companyName = "ไม่ระบุ";
+    let customerName = "ไม่ระบุ";
     let jobType = "ไม่ระบุ";
-    let jobDetails = fallbackDetails;
+    let jobDetails = fallbackDetails || "ไม่ระบุ";
 
     const lines = aiResponse.split('\n');
     for (const line of lines) {
         const cleanLine = line.replace(/[*_`]/g, '').trim();
         if (cleanLine.includes('ชื่อบริษัทลูกค้า')) {
             const parts = cleanLine.split(':');
-            if (parts[1] && parts[1].trim()) companyName = parts[1].trim();
+            if (parts[1] && parts[1].trim() && parts[1].trim() !== '-') companyName = parts[1].trim();
         } else if (cleanLine.includes('ชื่อลูกค้า')) {
             const parts = cleanLine.split(':');
-            if (parts[1] && parts[1].trim()) customerName = parts[1].trim();
+            if (parts[1] && parts[1].trim() && parts[1].trim() !== '-') customerName = parts[1].trim();
         } else if (cleanLine.includes('ประเภทงาน')) {
             const parts = cleanLine.split(':');
-            if (parts[1] && parts[1].trim()) jobType = parts[1].trim();
+            if (parts[1] && parts[1].trim() && parts[1].trim() !== '-') jobType = parts[1].trim();
         } else if (cleanLine.includes('รายละเอียดงาน')) {
             const parts = cleanLine.split(':');
-            if (parts[1] && parts[1].trim()) jobDetails = parts[1].trim();
+            if (parts[1] && parts[1].trim() && parts[1].trim() !== '-') jobDetails = parts[1].trim();
         }
     }
 
@@ -194,23 +191,23 @@ client.on('interactionCreate', async interaction => {
         try {
             const prompt = `วิเคราะห์โพสต์งานโรงกลึงนี้: "${fullContent}"
 วิเคราะห์และดึงข้อมูลตามเงื่อนไขนี้อย่างเคร่งครัด:
-1. ชื่อบริษัทลูกค้า: มักเป็นตัวย่อ/ชื่อย่อ (เช่น CGS)
-2. ชื่อลูกค้า: มักจะมีคำว่า "k.", "คุณ", หรือชื่อบุคคลต่อท้ายชื่อบริษัท (เช่น k.สาคร, คุณสาคร, ช่างสาคร) ห้ามสับสนกับชื่อบริษัท
-3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข" แต่ถ้าในข้อความไม่ได้ระบุประเภทงานมาเลย ให้ตอบว่า "ไม่ระบุ"
-4. รายละเอียดงาน: หากมีคำว่า "ตามตัวอย่าง", "ตาม ตย.", "ตามรูป", "ตามไฟล์แนบ" ให้สรุปว่าอ้างอิงรายละเอียดตามรูปภาพตัวอย่างที่แนบมาด้วย
+1. ชื่อบริษัทลูกค้า: หากไม่มีการระบุชื่อบริษัทหรือตัวย่อในข้อความ ให้ตอบว่า "ไม่ระบุ"
+2. ชื่อลูกค้า: หากไม่มีการระบุชื่อบุคคล (เช่น k., คุณ, ช่าง) ในข้อความ ให้ตอบว่า "ไม่ระบุ"
+3. ประเภทงาน: ระบุว่าเป็น "ทำใหม่" หรือ "แก้ไข" แต่ถ้าไม่ได้ระบุประเภทงานมา ให้ตอบว่า "ไม่ระบุ"
+4. รายละเอียดงาน: หากไม่มีรายละเอียดงาน ให้ตอบว่า "ไม่ระบุ" (หากมีคำว่าตามตัวอย่าง ให้ระบุตามนั้น)
 
 จัดรูปแบบการตอบดังนี้:
-- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
-- ชื่อลูกค้า: [ระบุชื่อลูกค้า]
+- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ หรือ ไม่ระบุ]
+- ชื่อลูกค้า: [ระบุชื่อลูกค้า หรือ ไม่ระบุ]
 - ประเภทงาน: [ทำใหม่, แก้ไข, หรือ ไม่ระบุ]
-- รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
+- รายละเอียดงาน: [ระบุรายละเอียดงาน หรือ ไม่ระบุ]`;
 
             const aiResponse = await callGeminiWithFallback(prompt);
             const parsed = parseAiResponse(aiResponse, fullContent);
 
             const employeeName = interaction.member ? interaction.member.displayName : interaction.user.username;
             const currentDate = new Date().toISOString().split('T')[0];
-            const newThreadName = `${currentDate} - ${parsed.companyName}`;
+            const newThreadName = parsed.companyName !== "ไม่ระบุ" ? `${currentDate} - ${parsed.companyName}` : `${currentDate} - งานใหม่`;
 
             try {
                 await interaction.channel.setName(newThreadName);
@@ -230,8 +227,15 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
+            // 1. ส่งการ์ดสรุปอันใหม่ลงไปก่อน
             const summaryEmbedMsg = await interaction.channel.send({ embeds: [summaryEmbed] });
 
+            // 2. ค่อยลบการ์ดสรุปอันเก่าทิ้ง (ถ้ามี)
+            if (postData.summaryMessage) {
+                await postData.summaryMessage.delete().catch(() => {});
+            }
+
+            // ลบข้อความปุ่มกดเริ่มต้น
             if (postData.botMessage) {
                 await postData.botMessage.delete().catch(() => {});
             }
@@ -279,17 +283,17 @@ client.on('interactionCreate', async interaction => {
 
 ข้อความแก้ไขหรือเพิ่มติมที่ส่งมาใหม่: "${postData.pendingUpdateContent}"
 
-จงอัปเดตข้อมูลทั้งหมดให้สอดคล้องกับข้อความใหม่ โดยคงค่าเดิมไว้หากไม่มีการพูดถึงการเปลี่ยนแปลง และจัดรูปแบบการตอบดังนี้:
-- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ]
-- ชื่อลูกค้า: [ระบุชื่อลูกค้า]
+จงอัปเดตข้อมูลทั้งหมดให้สอดคล้องกับข้อความใหม่ โดยคงค่าเดิมไว้หากไม่มีการพูดถึงการเปลี่ยนแปลง หากข้อมูลส่วนไหนไม่มีการระบุ ให้ตอบว่า "ไม่ระบุ" และจัดรูปแบบการตอบดังนี้:
+- ชื่อบริษัทลูกค้า: [ระบุชื่อบริษัท/ชื่อย่อ หรือ ไม่ระบุ]
+- ชื่อลูกค้า: [ระบุชื่อลูกค้า หรือ ไม่ระบุ]
 - ประเภทงาน: [ทำใหม่, แก้ไข, หรือ ไม่ระบุ]
-- รายละเอียดงาน: [ระบุรายละเอียดงาน]`;
+- รายละเอียดงาน: [ระบุรายละเอียดงาน หรือ ไม่ระบุ]`;
 
             const aiResponse = await callGeminiWithFallback(updatePrompt);
             const parsed = parseAiResponse(aiResponse, postData.currentSummary.jobDetails);
 
             const currentDate = new Date().toISOString().split('T')[0];
-            const newThreadName = `${currentDate} - ${parsed.companyName}`;
+            const newThreadName = parsed.companyName !== "ไม่ระบุ" ? `${currentDate} - ${parsed.companyName}` : `${currentDate} - งานอัปเดต`;
 
             try {
                 await interaction.channel.setName(newThreadName);
@@ -311,12 +315,15 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
+            // 1. ส่งการ์ดสรุปอันใหม่ลงไปก่อน
             const newSummaryMsg = await interaction.channel.send({ embeds: [updatedEmbed] });
 
+            // 2. ค่อยลบการ์ดสรุปอันเก่าทิ้ง
             if (postData.summaryMessage) {
                 await postData.summaryMessage.delete().catch(() => {});
             }
 
+            // ลบข้อความปุ่มอัปเดตทิ้ง
             if (postData.updateBotMessage) {
                 await postData.updateBotMessage.delete().catch(() => {});
             }
