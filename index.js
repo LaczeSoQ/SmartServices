@@ -37,7 +37,7 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
