@@ -37,7 +37,7 @@ async function callGeminiWithFallback(promptText) {
         try {
             console.log(`กำลังเรียกใช้งาน Gemini API ด้วย Key ที่ ${i + 1}...`);
             const genAI = new GoogleGenerativeAI(apiKeys[i]);
-            const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
             const result = await model.generateContent(promptText);
             const response = await result.response;
             return response.text();
@@ -49,7 +49,6 @@ async function callGeminiWithFallback(promptText) {
     throw new Error(`Gemini API ล้มเหลวทุก Key: ${lastError ? lastError.message : 'Unknown error'}`);
 }
 
-// ฟังก์ชันแกะข้อมูลแบบแม่นยำ ป้องกันปัญหาเครื่องหมาย Markdown เกิน
 function parseAiResponse(aiResponse, fallbackDetails) {
     let companyName = "ไม่ระบุชื่อบริษัท";
     let customerName = "ไม่ระบุชื่อลูกค้า";
@@ -109,7 +108,7 @@ client.on('messageCreate', async message => {
             };
             postDataMap.set(threadId, postData);
 
-            const confirmRow = new ActionRowBuilder().addComponents(
+            const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('confirm_summary')
                     .setLabel('✅ ยืนยันข้อมูลและสรุปงาน')
@@ -118,7 +117,7 @@ client.on('messageCreate', async message => {
 
             postData.botMessage = await message.reply({
                 content: `📌 **ข้อมูลครบหรือยัง?** กดยืนยันด้านล่างได้เลย (หากมีเพิ่มพิมพ์ส่งมาได้ครับ)`,
-                components: [confirmRow]
+                components: [row]
             });
         } else {
             if (postData.isConfirmed) {
@@ -188,17 +187,17 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
 
+    const threadId = interaction.channel.id;
+    const postData = postDataMap.get(threadId);
+
+    if (!postData) {
+        return interaction.reply({ 
+            content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', 
+            ephemeral: true 
+        });
+    }
+
     if (interaction.customId === 'confirm_summary') {
-        const threadId = interaction.channel.id;
-        const postData = postDataMap.get(threadId);
-
-        if (!postData) {
-            return interaction.reply({ 
-                content: '❌ ไม่พบข้อมูลโพสต์นี้ในระบบ กรุณาลองใหม่อีกครั้ง', 
-                ephemeral: true 
-            });
-        }
-
         if (interaction.user.id !== postData.ownerId) {
             return interaction.reply({ 
                 content: '❌ เฉพาะเจ้าของโพสต์เท่านั้นที่มีสิทธิ์กดยืนยันครับ', 
@@ -207,13 +206,6 @@ client.on('interactionCreate', async interaction => {
         }
 
         await interaction.deferUpdate();
-
-        if (postData.botMessage) {
-            await postData.botMessage.edit({
-                content: `⏳ **กำลังประมวลผล...**`,
-                components: []
-            }).catch(() => {});
-        }
 
         const fullContent = postData.contents.join('\n');
 
@@ -258,11 +250,9 @@ client.on('interactionCreate', async interaction => {
 
             const summaryEmbedMsg = await interaction.channel.send({ embeds: [summaryEmbed] });
 
+            // ลบข้อความปุ่มกดเก่าทิ้งทันทีหลังจากสรุปงานสำเร็จ
             if (postData.botMessage) {
-                await postData.botMessage.edit({
-                    content: `✅ **ยืนยันและสรุปข้อมูลเรียบร้อยแล้วโดยคุณ ${employeeName}**`,
-                    components: []
-                }).catch(() => {});
+                await postData.botMessage.delete().catch(() => {});
             }
 
             postData.isConfirmed = true;
